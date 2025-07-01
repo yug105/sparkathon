@@ -1,0 +1,167 @@
+# Configuration file for Real World Scenario Generator
+# This file can be overridden by environment variables
+
+# API Keys (set these in environment variables)
+api_keys:
+  weather_api_key: ${OPENWEATHER_API_KEY}
+  google_api_key: ${GOOGLE_API_KEY}
+  twitter_bearer_token: ${TWITTER_BEARER_TOKEN}
+  news_api_key: ${NEWS_API_KEY}
+  eventbrite_api_key: ${EVENTBRITE_API_KEY}
+
+# Default Location Settings
+location:
+  default_latitude: 40.7128
+  default_longitude: -74.0060
+  default_city: "New York"
+  default_state: "NY"
+  default_country: "US"
+  default_timezone: "America/New_York"
+  default_population: 8500000
+
+# LLM Configuration
+llm:
+  model: "gpt-3.5-turbo"
+  temperature: 0.7
+
+# Weather API Settings
+weather:
+  units: "imperial" # imperial or metric
+  timeout: 10
+  hot_threshold: 85
+  cold_threshold: 32
+  visibility_fallback_meters: 10000
+  pressure_fallback_hpa: 1013.0
+  sunrise_fallback: "06:30"
+  sunset_fallback: "19:30"
+
+# Trending Data Limits
+trending:
+  max_trending_topics: 10
+  max_local_events: 5
+  max_search_trends: 10
+  max_social_mentions: 10
+  max_news_headlines: 5
+
+# Base Trending Topics
+base_trending_topics:
+  - "local restaurants"
+  - "food delivery"
+  - "grocery shopping"
+  - "weather"
+  - "events"
+  - "traffic"
+  - "local news"
+
+# Product Categories
+product_categories:
+  - "beverages"
+  - "dairy"
+  - "produce"
+  - "bakery"
+  - "frozen"
+  - "meat"
+  - "pantry"
+  - "snacks"
+  - "household"
+  - "personal_care"
+
+# Inventory Settings
+inventory:
+  low_stock_threshold: 10
+  expiry_days_threshold: 3
+
+# Fallback Values
+fallback:
+  temperature: 72.0
+  humidity: 50.0
+  condition: "clear"
+  wind_speed: 5.0
+  precipitation_chance: 10.0
+  uv_index: 5.0
+  visibility: 10.0
+  pressure: 1013.0
+  sunrise: "06:30"
+  sunset: "19:30"
+
+# Weather-specific Trending Topics
+weather_trends:
+  hot_weather:
+    - "ice cream"
+    - "cold drinks"
+    - "air conditioning"
+    - "frozen foods"
+    - "beverages"
+  cold_weather:
+    - "hot chocolate"
+    - "soup"
+    - "warm food"
+    - "comfort food"
+    - "hot beverages"
+  rainy_weather:
+    - "umbrella"
+    - "indoor activities"
+    - "comfort food"
+    - "delivery services"
+    - "indoor entertainment"
+
+# Demo Data (used when APIs are not available)
+demo_data:
+  local_events:
+    - name: "Local Food Festival"
+      type: "food_event"
+      expected_attendance: 5000
+      impact: "high"
+    - name: "Sports Game"
+      type: "sports_event"
+      expected_attendance: 20000
+      impact: "medium"
+    - name: "Community Market"
+      type: "market_event"
+      expected_attendance: 3000
+      impact: "medium"
+
+  search_trends:
+    - term: "organic produce"
+      trend: "rising"
+      category: "produce"
+    - term: "plant-based milk"
+      trend: "rising"
+      category: "dairy"
+    - term: "energy drinks"
+      trend: "stable"
+      category: "beverages"
+    - term: "local bakery"
+      trend: "rising"
+      category: "bakery"
+
+  social_mentions:
+    - platform: "twitter"
+      mention: "Local grocery store has amazing organic selection!"
+      sentiment: "positive"
+      category: "produce"
+      engagement: 150
+    - platform: "instagram"
+      mention: "Best coffee in town at our local market"
+      sentiment: "positive"
+      category: "beverages"
+      engagement: 89
+    - platform: "facebook"
+      mention: "Great deals on fresh produce today!"
+      sentiment: "positive"
+      category: "produce"
+      engagement: 45
+
+  news_headlines:
+    - "Local farmers market expands to new location"
+    - "New restaurant district opening downtown"
+    - "Weather alert: Heat wave expected this weekend"
+    - "Community food drive this Saturday"
+    - "Local grocery store wins sustainability award"
+
+# Calculation Constants
+calculations:
+  visibility_meters_to_km: 1000
+  precipitation_multiplier: 100
+  uv_index_fallback: 5.0
+  feels_like_fallback_multiplier: 1.0
