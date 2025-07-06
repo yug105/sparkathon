@@ -2,12 +2,20 @@
 from typing import Dict, List, Any, Tuple
 from datetime import datetime, timedelta
 from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
 from sqlalchemy import create_engine, text
 import pandas as pd
 import json
 import numpy as np
 from shared_state import SharedRetailState, add_agent_message
+import logging
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import Runnable, RunnablePassthrough
+from db_utils import create_robust_engine
+from shared_state import AgentMode
+
+logger = logging.getLogger(__name__)
 
 def convert_numpy_types(obj):
     """Recursively convert numpy types to native Python types"""
@@ -27,13 +35,25 @@ def convert_numpy_types(obj):
 class SustainabilityMonitoringAgent:
     """Agent responsible for tracking environmental metrics and compliance reporting"""
     
-    def __init__(self, openai_api_key: str, db_url: str):
-        self.llm = ChatOpenAI(
-            model="gpt-3.5-turbo",
-            openai_api_key=openai_api_key,
-            temperature=0.3
-        )
-        self.engine = create_engine(db_url)
+    def __init__(self, api_key: str, db_url: str, provider: str = "openai", mode: AgentMode = AgentMode.STREAMING):
+        self.agent_name = "sustainability_agent"
+        self.db_url = db_url
+        self.api_key = api_key
+        self.mode = mode
+        
+        if provider == "claude":
+            self.llm = ChatAnthropic(
+                model="claude-3-haiku-20240307",
+                anthropic_api_key=api_key,
+                temperature=0.2
+            )
+        else:
+            self.llm = ChatOpenAI(
+                model="gpt-4o-mini",
+                openai_api_key=api_key,
+                temperature=0.3
+            )
+        self.engine = create_robust_engine(db_url)
         
         self.system_prompt = """You are the Sustainability Monitoring and Reporting Agent.
         Your responsibilities include:
@@ -164,7 +184,8 @@ class SustainabilityMonitoringAgent:
         ORDER BY recorded_at DESC
         """
         
-        return pd.read_sql(query, self.engine)
+        from db_utils import execute_query_with_retry
+        return execute_query_with_retry(self.engine, query)
 
     def _analyze_environmental_impact(
         self,
@@ -365,3 +386,81 @@ class SustainabilityMonitoringAgent:
         }
         
         return report
+
+    def run(self, state: dict) -> dict:
+        """
+        Calculates environmental impact metrics based on the final actions.
+        """
+        logger.info(f"Running {self.agent_name}...")
+
+        # ... (existing calculation logic) ...
+        # For this example, we'll use a simplified heuristic based on state data.
+        
+        waste_prevented_kg = 0
+        donation_meals = 0
+        
+        # Calculate waste prevention from pricing changes
+        for change in state.get("pricing_changes", []):
+            quantity = change.get("quantity", 0)
+            if quantity > 0 and change.get("discount_percentage", 0) > 20:
+                # Assume significant markdown prevents waste
+                waste_prevented_kg += quantity * 0.5  # 0.5 kg per item avg
+        
+        # Calculate donations
+        for action in state.get("diversion_actions", []):
+            if action.get("diversion_type") == "donation":
+                quantity = action.get("quantity", 0)
+                # Assume 1 item = 2.5 meals
+                donation_meals += quantity * 2.5
+                # Donated items also count as waste prevention
+                waste_prevented_kg += quantity * 0.5
+        
+        # Estimate carbon savings (e.g., 2.5 kg CO2 saved per kg of waste prevented)
+        carbon_saved_kg = waste_prevented_kg * 2.5
+        
+        environmental_metrics = {
+            "waste_prevented_kg": round(waste_prevented_kg, 2),
+            "donation_meals": int(donation_meals),
+            "carbon_saved_kg": round(carbon_saved_kg, 2),
+            "water_saved_liters": int(waste_prevented_kg * 100),  # Estimate
+            "donation_rate": round(len(state.get("diversion_actions", [])) / (len(state.get("pricing_changes",[])) + 1),2)
+        }
+        
+        state["environmental_metrics"] = environmental_metrics
+        logger.info(f"Calculated environmental metrics: {environmental_metrics}")
+
+        # NEW: Save the calculated metrics as a decision in the database
+        reasoning = (
+            f"Calculated sustainability impact: "
+            f"{environmental_metrics['waste_prevented_kg']}kg waste prevented, "
+            f"{environmental_metrics['donation_meals']} meals donated, "
+            f"{environmental_metrics['carbon_saved_kg']}kg CO2 saved."
+        )
+        self.save_decision("calculate_impact_metrics", environmental_metrics, reasoning)
+
+        return state
+
+    # NEW: Add the save_decision method
+    def save_decision(self, decision_type: str, data: dict, reasoning: str):
+        """Saves an agent's decision to the database."""
+        if not self.engine:
+            logger.warning("Database not configured, skipping save decision.")
+            return
+
+        try:
+            with self.engine.connect() as conn:
+                query = text("""
+                    INSERT INTO agent_decisions (agent_name, decision_type, decision_data, reasoning, mode, created_at)
+                    VALUES (:agent_name, :decision_type, :data, :reasoning, :mode, NOW())
+                """)
+                conn.execute(query, {
+                    "agent_name": self.agent_name,
+                    "decision_type": decision_type,
+                    "data": json.dumps(data),
+                    "reasoning": reasoning,
+                    "mode": self.mode.value
+                })
+                conn.commit()
+            logger.info(f"Saved decision for {self.agent_name}: {decision_type}")
+        except Exception as e:
+            logger.error(f"Error saving decision for {self.agent_name}: {e}", exc_info=True)

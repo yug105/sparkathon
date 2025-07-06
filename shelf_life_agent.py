@@ -1,23 +1,59 @@
-# shelf_life_agent.py - Monitors product expiration and shelf life
+# shelf_life_agent.py - Monitors product expiration and shelf life with structured output
 from typing import Dict, List, Any
 from datetime import datetime, timedelta, date
 from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.prompts import PromptTemplate
+from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, text
 import pandas as pd
 import json
 from shared_state import SharedRetailState, add_agent_message, Priority
 
+# Pydantic models for structured output
+class ShelfLifeAlert(BaseModel):
+    """Individual shelf life alert with recommendations"""
+    product_id: int = Field(description="Product ID from inventory")
+    name: str = Field(description="Product name")
+    category: str = Field(description="Product category")
+    urgency: str = Field(description="Urgency level: critical, high, medium, or low")
+    quantity: int = Field(description="Quantity at risk")
+    days_until_expiry: int = Field(description="Days until product expires")
+    value_at_risk: float = Field(description="Dollar value at risk if expired")
+    markdown_recommendation: int = Field(description="Recommended markdown percentage (0-80)")
+    alternative_channel: str = Field(description="Alternative channel: staff_sale, donation, compost, or clearance")
+    expected_recovery: float = Field(description="Expected recovery rate (0.0-1.0)")
+
+class ShelfLifeAnalysis(BaseModel):
+    """Complete shelf life analysis with structured alerts"""
+    alerts: List[ShelfLifeAlert] = Field(description="List of shelf life alerts")
+    total_value_at_risk: float = Field(description="Total value at risk across all products")
+    critical_count: int = Field(description="Number of critical items (expires within 24 hours)")
+    high_priority_count: int = Field(description="Number of high priority items (expires in 1-3 days)")
+
 class ShelfLifeAgent:
     """Agent responsible for monitoring product expiration dates and shelf life"""
     
-    def __init__(self, openai_api_key: str, db_url: str):
-        self.llm = ChatOpenAI(
-            model="gpt-3.5-turbo",
-            openai_api_key=openai_api_key,
-            temperature=0.2  # Lower temperature for more consistent analysis
-        )
-        self.engine = create_engine(db_url)
+    def __init__(self, api_key: str, db_url: str, provider: str = "openai"):
+        if provider == "claude":
+            self.llm = ChatAnthropic(
+                model="claude-3-haiku-20240307",
+                anthropic_api_key=api_key,
+                temperature=0.2
+            )
+        else:
+            self.llm = ChatOpenAI(
+                model="gpt-4o-mini",
+                openai_api_key=api_key,
+                temperature=0.3
+            )
+        from db_utils import create_robust_engine
+        self.engine = create_robust_engine(db_url)
+        
+        # Set up structured output parser
+        self.parser = JsonOutputParser(pydantic_object=ShelfLifeAnalysis)
         
         self.system_prompt = """You are the Shelf Life Monitoring Agent for a retail system.
         Your responsibilities:
@@ -95,7 +131,8 @@ class ShelfLifeAgent:
         ORDER BY i.expiry_date, value_at_risk DESC
         """
         
-        return pd.read_sql(query, self.engine)
+        from db_utils import execute_query_with_retry
+        return execute_query_with_retry(self.engine, query)
 
     def _categorize_by_urgency(self, df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
         """Categorize products by expiration urgency"""
@@ -114,7 +151,7 @@ class ShelfLifeAgent:
         categorized: Dict[str, pd.DataFrame],
         demand_analysis: Dict[str, Any]
     ) -> List[Dict]:
-        """Create detailed shelf life alerts using LLM"""
+        """Create detailed shelf life alerts using structured LLM output"""
         
         # Prepare summary for LLM
         summary = {
@@ -128,60 +165,64 @@ class ShelfLifeAgent:
         all_expiring = pd.concat(categorized.values()).sort_values('value_at_risk', ascending=False)
         top_items = all_expiring.head(20)
         
-        prompt = f"""
-        Analyze expiring inventory based on scenario: {scenario}
+        # Create prompt template with structured output instructions
+        prompt_template = PromptTemplate(
+            template="""Analyze expiring inventory based on scenario: {scenario}
         
-        Summary:
-        - Critical (≤24 hrs): {summary['critical']} items
-        - High (1-3 days): {summary['high']} items  
-        - Medium (4-7 days): {summary['medium']} items
-        - Total value at risk: ${summary['total_value_at_risk']:.2f}
+Summary:
+- Critical (≤24 hrs): {critical} items
+- High (1-3 days): {high} items  
+- Medium (4-7 days): {medium} items
+- Total value at risk: ${total_value_at_risk:.2f}
+
+Top items by value at risk:
+{top_items_data}
+
+Demand trends available: {has_demand_data}
+
+For each critical and high priority item, analyze and provide recommendations for:
+1. Optimal markdown percentage (0-80%)
+2. Alternative channels (staff_sale, donation, compost, clearance)
+3. Expected recovery rate (0.0-1.0)
+
+Consider product category, perishability, and current scenario conditions.
+
+{format_instructions}""",
+            input_variables=["scenario", "critical", "high", "medium", "total_value_at_risk", 
+                           "top_items_data", "has_demand_data"],
+            partial_variables={"format_instructions": self.parser.get_format_instructions()}
+        )
         
-        Top items by value at risk:
-        {top_items[['name', 'category', 'quantity', 'days_until_expiry', 'value_at_risk']].to_string()}
+        # Format the prompt
+        formatted_prompt = prompt_template.format(
+            scenario=scenario,
+            critical=summary['critical'],
+            high=summary['high'],
+            medium=summary['medium'],
+            total_value_at_risk=summary['total_value_at_risk'],
+            top_items_data=top_items[['name', 'category', 'quantity', 'days_until_expiry', 'value_at_risk']].to_string(),
+            has_demand_data=bool(demand_analysis)
+        )
         
-        Demand trends available: {bool(demand_analysis)}
-        
-        For each critical and high priority item, recommend:
-        1. Optimal markdown percentage
-        2. Alternative channels (staff sales, donations)
-        3. Expected recovery rate
-        
-        Respond with actionable alerts in JSON format:
-        {{
-            "alerts": [
-                {{
-                    "product_id": 1,
-                    "name": "...",
-                    "urgency": "critical/high/medium",
-                    "markdown_recommendation": 30,
-                    "alternative_channel": "donation",
-                    "expected_recovery": 0.7
-                }}
-            ]
-        }}
-        """
-        
-        messages = [
-            SystemMessage(content=self.system_prompt),
-            HumanMessage(content=prompt)
-        ]
+        # Create chain with structured output
+        chain = self.llm | self.parser
         
         try:
-            response = self.llm.invoke(messages)
+            # Get structured analysis from LLM
+            llm_analysis = chain.invoke([
+                SystemMessage(content=self.system_prompt),
+                HumanMessage(content=formatted_prompt)
+            ])
             
-            # Parse JSON response
-            import re
-            json_match = re.search(r'\{.*\}', response.content, re.DOTALL)
-            if json_match:
-                llm_analysis = json.loads(json_match.group())
+            # Handle both dict and Pydantic object responses
+            if isinstance(llm_analysis, dict):
                 alerts = llm_analysis.get('alerts', [])
             else:
-                alerts = []
-                
+                alerts = [alert.dict() for alert in llm_analysis.alerts]
+            
         except Exception as e:
-            # Log error but don't reference state here since it's not in scope
-            print(f"Shelf life agent LLM analysis error: {str(e)}")
+            print(f"Shelf life agent structured parsing error: {str(e)}")
+            # Fallback to empty analysis
             alerts = []
         
         # Create comprehensive alerts combining data and LLM recommendations
@@ -203,7 +244,7 @@ class ShelfLifeAgent:
                 "unit_price": float(row['unit_price']),
                 "value_at_risk": float(row['value_at_risk']),
                 "location": row['location'],
-                "urgency": self._determine_urgency(row['days_until_expiry']),
+                "urgency": llm_rec.get('urgency', self._determine_urgency(row['days_until_expiry'])),
                 "markdown_recommendation": llm_rec.get('markdown_recommendation', 
                     self._calculate_default_markdown(row['days_until_expiry'])),
                 "alternative_channel": llm_rec.get('alternative_channel', 

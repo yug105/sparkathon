@@ -1,23 +1,59 @@
-# pricing_discount_agent.py - Handles dynamic pricing and discounts
+# pricing_discount_agent.py - Handles dynamic pricing and discounts with structured output
 from typing import Dict, List, Any, Tuple
 from datetime import datetime, timedelta
 from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.prompts import PromptTemplate
+from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, text
 import pandas as pd
 import json
 from shared_state import SharedRetailState, add_agent_message
 
+# Pydantic models for structured output
+class PricingChange(BaseModel):
+    """Individual pricing change recommendation"""
+    product_id: int = Field(description="Product ID")
+    name: str = Field(description="Product name")
+    current_price: float = Field(description="Current price")
+    recommended_price: float = Field(description="Recommended new price")
+    discount_percentage: float = Field(description="Discount percentage if applicable")
+    strategy: str = Field(description="Pricing strategy: markdown, premium, dynamic, or clearance")
+    urgency: str = Field(description="Implementation urgency: immediate, high, medium, or low")
+    reason: str = Field(description="Reason for price change")
+    expected_impact: str = Field(description="Expected business impact")
+
+class PricingAnalysis(BaseModel):
+    """Complete pricing analysis with structured recommendations"""
+    pricing_changes: List[PricingChange] = Field(description="Recommended pricing changes")
+    total_revenue_impact: float = Field(description="Estimated total revenue impact")
+    urgent_changes: int = Field(description="Number of urgent pricing changes needed")
+    strategy_summary: str = Field(description="Overall pricing strategy summary")
+
 class PricingDiscountAgent:
     """Agent responsible for pricing optimization and discount strategies"""
     
-    def __init__(self, openai_api_key: str, db_url: str):
-        self.llm = ChatOpenAI(
-            model="gpt-3.5-turbo",
-            openai_api_key=openai_api_key,
-            temperature=0.4
-        )
-        self.engine = create_engine(db_url)
+    def __init__(self, api_key: str, db_url: str, provider: str = "openai"):
+        if provider == "claude":
+            self.llm = ChatAnthropic(
+                model="claude-3-haiku-20240307",
+                anthropic_api_key=api_key,
+                temperature=0.2,
+                max_tokens=4096,
+            )
+        else:
+            self.llm = ChatOpenAI(
+                model="gpt-4o-mini",
+                openai_api_key=api_key,
+                temperature=0.3
+            )
+        from db_utils import create_robust_engine
+        self.engine = create_robust_engine(db_url)
+        
+        # Set up structured output parser
+        self.parser = JsonOutputParser(pydantic_object=PricingAnalysis)
         
         self.system_prompt = """You are the Pricing and Discount Agent for a retail system.
         Your objectives:
@@ -108,7 +144,8 @@ class PricingDiscountAgent:
         LEFT JOIN latest_prices lp ON p.id = lp.product_id
         """
         
-        return pd.read_sql(query, self.engine)
+        from db_utils import execute_query_with_retry
+        return execute_query_with_retry(self.engine, query)
 
     def _fetch_competitor_pricing(self) -> pd.DataFrame:
         """Fetch recent competitor pricing actions"""
@@ -123,7 +160,8 @@ class PricingDiscountAgent:
         ORDER BY recorded_at DESC
         """
         
-        df = pd.read_sql(query, self.engine)
+        from db_utils import execute_query_with_retry
+        df = execute_query_with_retry(self.engine, query)
         
         # Parse competitor data
         competitor_actions = []
@@ -181,7 +219,8 @@ class PricingDiscountAgent:
         JOIN products p ON e.product_id = p.id
         """
         
-        return pd.read_sql(query, self.engine)
+        from db_utils import execute_query_with_retry
+        return execute_query_with_retry(self.engine, query)
 
     def _optimize_pricing(
         self,

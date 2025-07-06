@@ -4,6 +4,13 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 import operator
 
+# NEW: Imports for parser agent
+import os
+from langchain.agents import AgentExecutor, create_tool_calling_agent
+from langchain_community.tools.openweathermap import OpenWeatherMapQueryRun
+from langchain_community.tools import DuckDuckGoSearchRun
+from langchain_core.prompts import ChatPromptTemplate
+
 # Import all agents
 from supervisor_agent import SupervisorAgent
 from demand_agent import DemandAgent
@@ -13,22 +20,41 @@ from pricing_discount_agent import PricingDiscountAgent
 from waste_diversion_agent import WasteDiversionAgent
 from sustainability_monitoring_agent import SustainabilityMonitoringAgent
 from shared_state import SharedRetailState, initialize_state, AgentMode, add_agent_message
+from dotenv import load_dotenv
+load_dotenv()
 
 class RetailSustainabilityWorkflow:
     """Main workflow orchestrating all retail sustainability agents"""
     
-    def __init__(self, openai_api_key: str, db_url: str):
-        self.openai_api_key = openai_api_key
+    def __init__(self, api_key: str, db_url: str, provider: str = "openai"):
+        self.api_key = api_key
         self.db_url = db_url
+        self.provider = provider
+        
+        # Initialize LLM for parser agent
+        if provider == "claude":
+            from langchain_anthropic import ChatAnthropic
+            self.llm = ChatAnthropic(
+                model="claude-3-haiku-20240307",
+                anthropic_api_key=api_key,
+                temperature=0.1
+            )
+        else:
+            from langchain_openai import ChatOpenAI
+            self.llm = ChatOpenAI(
+                model="gpt-4o-mini",
+                openai_api_key=api_key,
+                temperature=0.1
+            )
         
         # Initialize all agents
-        self.supervisor = SupervisorAgent(openai_api_key)
-        self.demand_agent = DemandAgent(openai_api_key, db_url)
-        self.shelf_life_agent = ShelfLifeAgent(openai_api_key, db_url)
-        self.inventory_agent = InventoryAgent(openai_api_key, db_url)
-        self.pricing_agent = PricingDiscountAgent(openai_api_key, db_url)
-        self.waste_agent = WasteDiversionAgent(openai_api_key, db_url)
-        self.sustainability_agent = SustainabilityMonitoringAgent(openai_api_key, db_url)
+        self.supervisor = SupervisorAgent(api_key, provider)
+        self.demand_agent = DemandAgent(api_key, db_url, provider)
+        self.shelf_life_agent = ShelfLifeAgent(api_key, db_url, provider)
+        self.inventory_agent = InventoryAgent(api_key, db_url, provider)
+        self.pricing_agent = PricingDiscountAgent(api_key, db_url, provider)
+        self.waste_agent = WasteDiversionAgent(api_key, db_url, provider)
+        self.sustainability_agent = SustainabilityMonitoringAgent(api_key, db_url, provider)
         
         # Build the workflow
         self.workflow = self._build_workflow()
@@ -36,6 +62,84 @@ class RetailSustainabilityWorkflow:
         # Add memory for conversation history
         self.memory = MemorySaver()
         self.app = self.workflow.compile(checkpointer=self.memory)
+
+    def create_parser_agent(self):
+        """
+        Creates and returns a LangChain agent responsible for parsing
+        natural language scenarios into structured JSON.
+        """
+        system_prompt = """You are a highly intelligent parsing agent for a retail company. Your primary function is to convert a user's natural language "what-if" scenario into a structured JSON object.
+
+Your task is to:
+1. Analyze the user's prompt to determine the main event_type. The valid types are: 'weather', 'competitor', 'inventory', 'supply_chain', or 'local_event'.
+2. If the prompt mentions weather, you MUST use the OpenWeatherMap tool to get real-time, accurate weather data for the specified location.
+3. If the prompt mentions a general event (e.g., "music festival", "sports game"), you can use the web search tool to find details like expected attendance.
+4. Use the information you've gathered to construct a detailed event_data JSON object.
+
+IMPORTANT: Your response MUST contain ONLY the JSON object in a code block, like this:
+
+```json
+{{
+  "event_type": "...",
+  "event_data": {{...}}
+}}
+```
+
+Do NOT include any explanatory text before or after the JSON. The JSON must be valid and properly formatted.
+
+Example 1:
+User: "What if there's a major heatwave in New York this weekend?"
+Your response:
+```json
+{{
+  "event_type": "weather",
+  "event_data": {{
+    "temperature": 95,
+    "condition": "heatwave",
+    "duration_hours": 72,
+    "location": "New York",
+    "affected_categories": ["beverages", "frozen", "dairy"]
+  }}
+}}
+```
+
+Example 2:
+User: "What if our competitor MegaMart runs a 40% off sale on dairy products?"
+Your response:
+```json
+{{
+  "event_type": "competitor",
+  "event_data": {{
+    "competitor": "MegaMart",
+    "action": "flash_sale",
+    "changes": [
+      {{"category": "dairy", "discount": 0.4, "duration": "weekend"}}
+    ],
+    "market_impact": "high"
+  }}
+}}
+```
+
+Remember: ONLY return the JSON in a code block, nothing else."""
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", system_prompt),
+            ("human", "{input}"),
+            ("placeholder", "{agent_scratchpad}"),
+        ])
+
+        # Initialize tools
+        tools = [DuckDuckGoSearchRun()]
+        openweathermap_api_key = os.getenv("OPENWEATHERMAP_API_KEY")
+        if openweathermap_api_key:
+            tools.append(OpenWeatherMapQueryRun())
+        else:
+            print("Warning: OPENWEATHERMAP_API_KEY not found. Weather tool will be disabled.")
+            
+        agent = create_tool_calling_agent(self.llm, tools, prompt)
+        agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
+        
+        return agent_executor
 
     def _build_workflow(self) -> StateGraph:
         """Build the enhanced LangGraph workflow with proper integration"""

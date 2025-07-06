@@ -1,23 +1,56 @@
-# waste_diversion_agent.py - Manages waste diversion and recovery strategies
+# waste_diversion_agent.py - Manages waste diversion and recovery strategies with structured output
 from typing import Dict, List, Any, Tuple
 from datetime import datetime, timedelta
 from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.prompts import PromptTemplate
+from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, text
 import pandas as pd
 import json
 from shared_state import SharedRetailState, add_agent_message
 
+# Pydantic models for structured output
+class DiversionAction(BaseModel):
+    """Individual waste diversion action"""
+    product_id: int = Field(description="Product ID")
+    name: str = Field(description="Product name")
+    quantity: int = Field(description="Quantity to divert")
+    diversion_type: str = Field(description="Type: donation, compost, staff_sale, or discount")
+    urgency: str = Field(description="Urgency level: immediate, high, medium, or low")
+    partner_organization: str = Field(description="Target partner organization")
+    estimated_value_recovery: float = Field(description="Estimated value recovery amount")
+    environmental_impact: str = Field(description="Environmental impact description")
+
+class WasteDiversionAnalysis(BaseModel):
+    """Complete waste diversion analysis"""
+    diversion_actions: List[DiversionAction] = Field(description="Recommended diversion actions")
+    total_waste_prevented: float = Field(description="Total waste prevented in kg")
+    total_value_recovered: float = Field(description="Total value recovered in dollars")
+    donation_meals: int = Field(description="Estimated number of meals for donation")
+    environmental_summary: str = Field(description="Environmental impact summary")
+
 class WasteDiversionAgent:
     """Agent responsible for waste diversion, donations, and recovery strategies"""
     
-    def __init__(self, openai_api_key: str, db_url: str):
-        self.llm = ChatOpenAI(
-            model="gpt-3.5-turbo",
-            openai_api_key=openai_api_key,
-            temperature=0.3
-        )
-        self.engine = create_engine(db_url)
+    def __init__(self, api_key: str, db_url: str, provider: str = "openai"):
+        if provider == "claude":
+            self.llm = ChatAnthropic(
+                model="claude-3-haiku-20240307",
+                anthropic_api_key=api_key,
+                temperature=0.2,
+                max_tokens=4096,
+            )
+        else:
+            self.llm = ChatOpenAI(
+                model="gpt-4o-mini",
+                openai_api_key=api_key,
+                temperature=0.3
+            )
+        from db_utils import create_robust_engine
+        self.engine = create_robust_engine(db_url)
         
         self.system_prompt = """You are the Waste Diversion and Recovery Agent for a retail sustainability system.
         Your mission is to minimize waste and maximize value recovery through:

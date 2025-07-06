@@ -32,7 +32,8 @@ class WebhookSimulator:
             "weather": f"{target_base_url}/webhook/events/weather",
             "sales": f"{target_base_url}/webhook/events/sales",
             "competitor": f"{target_base_url}/webhook/events/competitor",
-            "inventory": f"{target_base_url}/webhook/events/inventory"
+            "inventory": f"{target_base_url}/webhook/events/inventory",
+            "waste_asset_created": f"{target_base_url}/webhook/events/waste-asset-created"
         }
         
         # Predefined scenarios with timed events
@@ -181,6 +182,33 @@ class WebhookSimulator:
                             "location": "New York",
                             "affected_categories": ["bakery", "produce"]
                         }
+                    }
+                }
+            ],
+            
+            "recycling_stream": [
+                {
+                    "delay": 0,
+                    "type": "waste_asset_created",
+                    "payload": {
+                        "assetId": "ASSET_PET_1689362001",
+                        "facilityId": "FAC_001",
+                        "materialType": "PET",
+                        "weightKg": 150.5,
+                        "purityPercentage": 98.5,
+                        "quality_grade": "A"
+                    }
+                },
+                {
+                    "delay": 5,
+                    "type": "waste_asset_created",
+                    "payload": {
+                        "assetId": "ASSET_HDPE_1689362006",
+                        "facilityId": "FAC_001",
+                        "materialType": "HDPE",
+                        "weightKg": 220.0,
+                        "purityPercentage": 95.0,
+                        "quality_grade": "B"
                     }
                 }
             ],
@@ -362,7 +390,7 @@ class WebhookSimulator:
         try:
             while self.is_running:
                 # Generate random event
-                event_type = random.choice(["weather", "sales", "competitor", "inventory"])
+                event_type = random.choice(["weather", "sales", "competitor", "inventory", "waste_asset_created"])
                 payload = self.generate_random_event(event_type)
                 
                 event_count += 1
@@ -377,9 +405,9 @@ class WebhookSimulator:
             print(f"\n{Fore.YELLOW}Continuous mode stopped. Total events sent: {event_count}{Style.RESET_ALL}")
             
     def generate_random_event(self, event_type: str) -> Dict:
-        """Generate a random event of the specified type"""
+        """Generate a random event payload for a given event type"""
         if event_type == "weather":
-            conditions = ["sunny", "rainy", "heatwave", "cold_snap", "storm"]
+            conditions = ["clear", "rainy", "stormy", "heatwave", "cold_snap", "cloudy"]
             condition = random.choice(conditions)
             temp = random.randint(30, 100)
             
@@ -441,7 +469,7 @@ class WebhookSimulator:
                 }
             }
             
-        else:  # inventory
+        elif event_type == "inventory":
             alert_types = ["low_stock", "mass_expiry", "overstock", "quality_issue"]
             alert_type = random.choice(alert_types)
             alert_level = random.choice(["low", "medium", "high", "critical"])
@@ -471,6 +499,21 @@ class WebhookSimulator:
                     ])
                 }
             }
+            
+        elif event_type == "waste_asset_created":
+            material_type = random.choice(["PET", "HDPE", "LDPE", "PP", "PS"])
+            asset_id = f"ASSET_{material_type}_{int(datetime.now().timestamp())}"
+            facility_id = f"FAC_{random.randint(1, 5):03d}"
+            return {
+                "assetId": asset_id,
+                "facilityId": facility_id,
+                "materialType": material_type,
+                "weightKg": round(random.uniform(50.0, 500.0), 2),
+                "purityPercentage": round(random.uniform(85.0, 99.5), 2),
+                "quality_grade": random.choice(["A", "B", "C"])
+            }
+            
+        return {}
             
     async def check_backend_health(self) -> bool:
         """Check if the backend is running and healthy"""
@@ -503,12 +546,12 @@ class WebhookSimulator:
             print("\n" + "="*40)
             print("Select an option:")
             print("1. Run Heatwave Scenario")
-            print("2. Run Competitor Scenario")
-            print("3. Run Expiry Crisis Scenario")
-            print("4. Run Mixed Scenario (Complex)")
-            print("5. Run Continuous Random Events")
+            print("2. Run Competitor Flash Sale Scenario")
+            print("3. Run Mass Expiry Scenario")
+            print("4. Run Mixed Events Scenario")
+            print("5. Run Recycling Stream Scenario")
             print("6. Send Custom Event")
-            print("7. Check Backend Health")
+            print("7. Run Continuous Random Simulation")
             print("0. Exit")
             print("="*40)
             
@@ -531,15 +574,15 @@ class WebhookSimulator:
                 await self.run_scenario("mixed")
                 
             elif choice == "5":
+                await self.run_scenario("recycling_stream")
+                
+            elif choice.lower() == "c":
+                await self.custom_event_menu()
+                
+            elif choice.lower() == "r":
                 interval = input("Enter interval between events (seconds) [30]: ").strip()
                 interval = int(interval) if interval else 30
                 await self.run_continuous(interval)
-                
-            elif choice == "6":
-                await self.custom_event_menu()
-                
-            elif choice == "7":
-                await self.check_backend_health()
                 
             else:
                 print(f"{Fore.RED}Invalid choice. Please try again.{Style.RESET_ALL}")
@@ -552,9 +595,10 @@ class WebhookSimulator:
         print("2. Sales Event")
         print("3. Competitor Event")
         print("4. Inventory Alert")
+        print("5. Waste Asset Created")
         print("0. Back to Main Menu")
         
-        event_choice = input("\nSelect event type (0-4): ").strip()
+        event_choice = input("\nSelect event type (0-5): ").strip()
         
         if event_choice == "0":
             return
@@ -563,7 +607,8 @@ class WebhookSimulator:
             "1": "weather",
             "2": "sales",
             "3": "competitor",
-            "4": "inventory"
+            "4": "inventory",
+            "5": "waste_asset_created"
         }
         
         if event_choice in event_types:
@@ -580,29 +625,20 @@ class WebhookSimulator:
                 print("Event cancelled.")
 
 async def main():
-    """Main function"""
-    # Get target URL from environment or use default
-    target_url = os.getenv("WEBHOOK_TARGET_URL", "http://localhost:8000")
-    
-    async with WebhookSimulator(target_url) as simulator:
-        try:
-            # Check if running in demo mode
-            if len(os.sys.argv) > 1:
-                scenario = os.sys.argv[1]
-                if scenario in simulator.scenarios:
-                    await simulator.run_scenario(scenario)
-                else:
-                    print(f"{Fore.RED}Unknown scenario: {scenario}{Style.RESET_ALL}")
-                    print(f"Available scenarios: {', '.join(simulator.scenarios.keys())}")
-            else:
-                # Interactive mode
-                await simulator.interactive_menu()
-                
-        except KeyboardInterrupt:
-            print(f"\n{Fore.YELLOW}Simulator stopped by user{Style.RESET_ALL}")
-        except Exception as e:
-            logger.error(f"Error in simulator: {e}")
-            print(f"{Fore.RED}Error: {e}{Style.RESET_ALL}")
+    """Main function to run the simulator"""
+    print("Waiting for backend to start...")
+    await asyncio.sleep(5)  # Wait 5 seconds for the server to start
+    async with WebhookSimulator() as simulator:
+        if await simulator.check_backend_health():
+            # await simulator.interactive_menu()
+            print("Running the 'recycling_stream' scenario directly for testing.")
+            await simulator.run_scenario("recycling_stream")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print(f"\n{Fore.YELLOW}Simulator stopped by user{Style.RESET_ALL}")
+    except Exception as e:
+        logger.error(f"Error in simulator: {e}")
+        print(f"{Fore.RED}Error: {e}{Style.RESET_ALL}")

@@ -2,6 +2,7 @@
 import re
 from typing import Dict, List, Literal
 from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
 from shared_state import SharedRetailState, Priority, add_agent_message
 import json
@@ -9,12 +10,20 @@ import json
 class SupervisorAgent:
     """Supervisor agent that orchestrates the multi-agent workflow"""
     
-    def __init__(self, openai_api_key: str):
-        self.llm = ChatOpenAI(
-            model="gpt-3.5-turbo",
-            openai_api_key=openai_api_key,
-            temperature=0.3
-        )
+    def __init__(self, api_key: str, provider: str = "openai"):
+        if provider == "claude":
+            self.llm = ChatAnthropic(
+                model="claude-3-haiku-20240307",
+                temperature=0, 
+                max_tokens=4096,
+                anthropic_api_key=api_key
+            )
+        else:
+            self.llm = ChatOpenAI(
+                model="gpt-4o-mini",
+                openai_api_key=api_key,
+                temperature=0.3
+            )
         
         self.system_prompt = """You are the Supervisor Agent for a retail sustainability system. 
         Your role is to analyze scenarios and determine:

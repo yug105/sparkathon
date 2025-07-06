@@ -1,23 +1,60 @@
-# demand_agent.py - Analyzes demand patterns and trends
+# demand_agent.py - Analyzes demand patterns and trends with structured output
 from typing import Dict, List, Any
 from datetime import datetime, timedelta
 from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.prompts import PromptTemplate
+from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, text
 import pandas as pd
 import json
 from shared_state import SharedRetailState, add_agent_message
+import os
+
+# Pydantic models for structured output
+class ProductTrend(BaseModel):
+    """Individual product trend analysis"""
+    product_id: int = Field(description="Product ID")
+    name: str = Field(description="Product name")
+    category: str = Field(description="Product category")
+    trend_direction: str = Field(description="up, down, or stable")
+    change_percentage: float = Field(description="Percentage change in demand")
+    confidence_score: float = Field(description="Confidence in prediction (0.0-1.0)")
+    reason: str = Field(description="Reason for trend")
+
+class DemandAnalysis(BaseModel):
+    """Complete demand analysis with structured output"""
+    trending_up: List[ProductTrend] = Field(description="Products with increasing demand")
+    trending_down: List[ProductTrend] = Field(description="Products with decreasing demand") 
+    stable: List[ProductTrend] = Field(description="Products with stable demand")
+    seasonal_factors: Dict[str, str] = Field(description="Seasonal impact factors")
+    external_factors: List[Dict[str, str]] = Field(description="External factors affecting demand")
+    recommendations: List[str] = Field(description="Strategic recommendations")
 
 class DemandAgent:
     """Agent responsible for analyzing demand patterns and market conditions"""
     
-    def __init__(self, openai_api_key: str, db_url: str):
-        self.llm = ChatOpenAI(
-            model="gpt-3.5-turbo",
-            openai_api_key=openai_api_key,
-            temperature=0.3
-        )
-        self.engine = create_engine(db_url)
+    def __init__(self, api_key: str, db_url: str, provider: str = "openai"):
+        if provider == "claude":
+            self.llm = ChatAnthropic(
+                model="claude-3-haiku-20240307",
+                anthropic_api_key=api_key,
+                temperature=0.2,
+                max_tokens=2048,
+            )
+        else:
+            self.llm = ChatOpenAI(
+                model="gpt-4o-mini",
+                openai_api_key=api_key,
+                temperature=0.3
+            )
+        from db_utils import create_robust_engine
+        self.engine = create_robust_engine(db_url)
+        
+        # Set up structured output parser
+        self.parser = JsonOutputParser(pydantic_object=DemandAnalysis)
         
         self.system_prompt = """You are the Demand Analysis Agent for a retail system.
         Your role is to:
@@ -100,7 +137,8 @@ class DemandAgent:
         ORDER BY demand_change_pct DESC
         """
         
-        return pd.read_sql(query, self.engine)
+        from db_utils import execute_query_with_retry
+        return execute_query_with_retry(self.engine, query)
 
     def _fetch_market_conditions(self) -> pd.DataFrame:
         """Fetch recent market conditions"""
@@ -115,7 +153,8 @@ class DemandAgent:
         ORDER BY recorded_at DESC
         """
         
-        return pd.read_sql(query, self.engine)
+        from db_utils import execute_query_with_retry
+        return execute_query_with_retry(self.engine, query)
 
     def _fetch_demand_forecasts(self) -> pd.DataFrame:
         """Fetch demand forecasts"""
@@ -133,7 +172,8 @@ class DemandAgent:
         ORDER BY df.forecast_date, p.category
         """
         
-        return pd.read_sql(query, self.engine)
+        from db_utils import execute_query_with_retry
+        return execute_query_with_retry(self.engine, query)
 
     def _analyze_demand_patterns(
         self, 

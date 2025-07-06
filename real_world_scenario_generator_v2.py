@@ -259,6 +259,14 @@ class RealWorldScenarioGenerator:
             geolocator = Nominatim(user_agent="retail_ai_scenario_generator")
             location = geolocator.reverse(f"{lat}, {lon}")
             
+            # Add null check for location
+            if location is None:
+                raise Exception("Location service returned None")
+            
+            # Add null check for location.raw
+            if not hasattr(location, 'raw') or location.raw is None:
+                raise Exception("Location service returned invalid data")
+            
             address = location.raw.get('address', {})
             
             return LocationData(
@@ -272,6 +280,7 @@ class RealWorldScenarioGenerator:
             )
         except Exception as e:
             logger.error(f"Error getting location data: {e}")
+            # Return fallback location data
             return LocationData(
                 latitude=lat,
                 longitude=lon,
